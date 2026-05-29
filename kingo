@@ -1,0 +1,80 @@
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
+
+const users = {};        // { nick: { password, messageCount } }
+const rooms = { "Genel": [] };
+
+io.on('connection', (socket) => {
+  socket.on('login', ({ nick, password }) => {
+    if (!users[nick]) {
+      users[nick] = { password, messageCount: 0, currentRoom: "Genel" };
+    }
+
+    if (users[nick].password === password) {
+      socket.nick = nick;
+      socket.currentRoom = "Genel";
+      socket.join("Genel");
+      socket.emit('login success', { 
+        nick, 
+        messageCount: users[nick].messageCount 
+      });
+    } else {
+      socket.emit('login error', 'Şifre yanlış!');
+    }
+  });
+
+  socket.on('create room', (roomName) => {
+    if (roomName && !rooms[roomName]) {
+      rooms[roomName] = [];
+      io.emit('room list', Object.keys(rooms));
+    }
+  });
+
+  socket.on('join room', (roomName) => {
+    if (socket.nick && rooms[roomName]) {
+      socket.leave(socket.currentRoom);
+      socket.join(roomName);
+      socket.currentRoom = roomName;
+      socket.emit('room joined', roomName);
+    }
+  });
+
+  socket.on('chat message', (msg) => {
+    if (!socket.nick) return;
+    users[socket.nick].messageCount++;
+
+    io.to(socket.currentRoom).emit('chat message', {
+      nick: socket.nick,
+      msg: msg,
+      level: getLevel(users[socket.nick].messageCount)
+    });
+  });
+
+  socket.on('private message', ({ to, msg }) => {
+    if (!socket.nick) return;
+    for (let s of io.sockets.sockets.values()) {
+      if (s.nick === to) {
+        s.emit('private message', { from: socket.nick, msg });
+        socket.emit('pm sent', { to, msg });
+        return;
+      }
+    }
+    socket.emit('pm error', 'Kullanıcı şu anda çevrimiçi değil.');
+  });
+});
+
+function getLevel(count) {
+  if (count > 100000) return "Eski Kullanıcı";
+  if (count > 50000) return "Tecrübeli";
+  if (count > 5000) return "Mürver";
+  if (count > 1000) return "Tecrübeli";
+  if (count > 100) return "Amatör";
+  return "Acemi";
+}
+
+server.listen(3000, () => console.log('✅ KingChat Server çalışıyor: http://localhost:3000'));
